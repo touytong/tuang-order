@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>รับของ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+
+<div id="sLoad" class="screen center">กำลังโหลด…</div>
+<div id="sErr" class="screen center" hidden><p id="errMsg"></p><button class="linkbtn" onclick="location.reload()">ลองใหม่</button></div>
+
+<div id="sList" class="screen" hidden>
+  <h1>รับของ</h1>
+  <div class="note" id="listHint">แตะออเดอร์ที่ของมาส่งแล้ว</div>
+  <div id="orders"></div>
+</div>
+
+<div id="sCheck" class="screen" hidden>
+  <h1 id="chTitle"></h1>
+  <div class="note" id="chSub"></div>
+  <p class="note">แตะรายการที่ <b>ไม่ได้รับ</b> (ปกติถือว่ารับครบ)</p>
+  <div id="chItems"></div>
+  <div class="bar"><div class="in">
+    <button class="btn ghost" id="btnBack">กลับ</button>
+    <button class="btn" id="btnSend">ยืนยัน</button>
+  </div></div>
+</div>
+
+<div id="sDone" class="screen" hidden>
+  <div class="okmark" id="doneMark">✓</div>
+  <h1 style="text-align:center" id="doneTitle"></h1>
+  <p class="note" style="text-align:center" id="doneSub"></p>
+  <div class="bar"><div class="in"><button class="btn" id="btnNext">กลับไปรายการ</button></div></div>
+</div>
+
+<div id="toast"></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+var R = { orders: [], cur: null, rej: {} };
+
+async function load() {
+  var r = await api('pending');
+  R.orders = r.orders; renderList(); show('sList');
+}
+
+function renderList() {
+  var html = '';
+  if (!R.orders.length) html = '<div class="card" style="text-align:center">ไม่มีออเดอร์ที่รอรับ 🎉</div>';
+  R.orders.forEach(function (o, idx) {
+    html += '<div class="card" data-i="' + idx + '" style="cursor:pointer"><div class="hd"><span>' + esc(o.supplier) + '</span><span class="sub">' + o.items.length + ' รายการ</span></div>' +
+      '<div class="sub">' + esc(o.order_no) + ' · สาขา ' + esc(o.branchName) + ' · สั่ง ' + esc(o.order_date) + (o.sent ? '' : ' · ยังไม่ส่งใบสั่ง') + '</div></div>';
+  });
+  $('orders').innerHTML = html;
+}
+$('orders').addEventListener('click', function (e) {
+  var c = e.target.closest('.card[data-i]'); if (!c) return;
+  R.cur = R.orders[Number(c.dataset.i)]; R.rej = {};
+  $('chTitle').textContent = R.cur.supplier;
+  $('chSub').textContent = R.cur.order_no + ' · สาขา ' + R.cur.branchName;
+  drawItems(); show('sCheck');
+});
+
+function drawItems() {
+  var html = '';
+  R.cur.items.forEach(function (it, i) {
+    var bad = R.rej[it.name];
+    html += '<button class="tick' + (bad ? ' rej' : '') + '" data-i="' + i + '"><span class="nm">' + esc(it.name) + ' <span class="sub">' + fmtQty(it.qty) + ' ' + esc(it.unit) + '</span></span><span class="st">' + (bad ? 'ไม่รับ' : 'รับ ✓') + '</span></button>';
+  });
+  $('chItems').innerHTML = html;
+  var n = Object.keys(R.rej).length;
+  $('btnSend').textContent = n ? 'ยืนยัน (ไม่รับ ' + n + ')' : 'ยืนยัน รับครบ';
+}
+$('chItems').addEventListener('click', function (e) {
+  var b = e.target.closest('.tick'); if (!b) return;
+  var name = R.cur.items[Number(b.dataset.i)].name;
+  if (R.rej[name]) delete R.rej[name]; else R.rej[name] = 1;
+  drawItems();
+});
+$('btnBack').onclick = function () { show('sList'); };
+
+$('btnSend').onclick = async function () {
+  var n = Object.keys(R.rej).length;
+  if (n && !confirm('แจ้งว่าไม่ได้รับ ' + n + ' รายการ?')) return;
+  var btn = this; btn.disabled = true;
+  try {
+    var r = await api('receive', { order_no: R.cur.order_no, rejected: Object.keys(R.rej) });
+    if (r.status === 'issue') {
+      $('doneMark').textContent = '⚠'; $('doneTitle').textContent = 'แจ้งปัญหาแล้ว';
+      $('doneSub').textContent = r.notified ? 'ส่งรายการที่ไม่รับเข้ากลุ่มแจ้งปัญหาแล้ว' : 'บันทึกแล้ว แต่ส่งเข้ากลุ่มแจ้งปัญหาไม่สำเร็จ — แจ้งเจ้าของร้าน';
+    } else {
+      $('doneMark').textContent = '✓'; $('doneTitle').textContent = 'รับของครบแล้ว'; $('doneSub').textContent = '';
+    }
+    show('sDone');
+  } catch (e) { toast(e.message); }
+  btn.disabled = false;
+};
+$('btnNext').onclick = async function () { try { await load(); } catch (e) { fatal(e.message); } };
+
+(async function () {
+  try { if (!(await boot(CONFIG.LIFF_RECEIVE_ID))) return; await load(); }
+  catch (e) { fatal(e.message); }
+})();
+</script>
+</body>
+</html>

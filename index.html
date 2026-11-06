@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>สั่งของ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+
+<div id="sLoad" class="screen center">กำลังโหลด…</div>
+<div id="sErr" class="screen center" hidden><p id="errMsg"></p><button class="linkbtn" onclick="location.reload()">ลองใหม่</button></div>
+
+<div id="sPick" class="screen" hidden>
+  <h1>เลือกสาขาของคุณ</h1>
+  <p class="note">เลือกครั้งเดียว ระบบจะจำไว้ให้ ออเดอร์จะถูกบันทึกเป็นของสาขานี้</p>
+  <div class="pick" id="pickList"></div>
+</div>
+
+<div id="sOrder" class="screen" hidden>
+  <div class="top">
+    <div class="row">
+      <span class="chip" id="chipBranch"></span>
+      <span class="chip">🔒 <span id="chipDate"></span></span>
+    </div>
+    <input type="search" id="q" placeholder="ค้นหาวัตถุดิบ" style="margin-top:8px" autocomplete="off">
+    <div class="chips" id="cats"></div>
+  </div>
+  <div id="list"></div>
+  <div class="bar"><div class="in"><button class="btn" id="btnReview" disabled>ตรวจสอบออเดอร์</button></div></div>
+</div>
+
+<div id="sReview" class="screen" hidden>
+  <h1>ตรวจสอบออเดอร์</h1>
+  <div class="note" id="revHead"></div>
+  <div id="revList"></div>
+  <h2>หมายเหตุ (ถ้ามี)</h2>
+  <textarea id="note" maxlength="300"></textarea>
+  <div class="bar"><div class="in">
+    <button class="btn ghost" id="btnBack">แก้ไข</button>
+    <button class="btn" id="btnSubmit">ยืนยันสั่งของ</button>
+  </div></div>
+</div>
+
+<div id="sDone" class="screen" hidden>
+  <div class="okmark">✓</div>
+  <h1 style="text-align:center">บันทึกออเดอร์แล้ว</h1>
+  <div id="doneList"></div>
+  <p class="note" style="text-align:center" id="doneNote"></p>
+  <div class="bar"><div class="in"><button class="btn" id="btnClose">ปิด</button></div></div>
+</div>
+
+<div id="toast"></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+var S = { branches: [], branch: '', items: [], cutoffs: {}, today: '', qty: {}, cat: 'ทั้งหมด', q: '', hq: false, mode: 'instant' };
+
+function draftKey() { return 'tk_draft_' + S.branch; }
+function saveDraft() { lsSet(draftKey(), { qty: S.qty, note: $('note').value }); }
+function branchName(code) { var b = S.branches.filter(function (x) { return x.code === code; })[0]; return b ? b.name : code; }
+function slipText(o) {
+  if (o.slip === 'sent') return 'ส่งใบสั่งให้ซัพแล้ว ✓';
+  if (o.slip === 'unbound') return 'บันทึกแล้ว · ซัพยังไม่ผูกกลุ่ม แจ้งเจ้าของร้าน';
+  if (o.slip === 'failed') return 'บันทึกแล้ว · ส่งไม่สำเร็จ ระบบจะลองใหม่';
+  return 'ส่งใบสั่ง ' + esc(o.cutoff) + ' น.';
+}
+function selectedCount() { return Object.keys(S.qty).filter(function (k) { return S.qty[k] > 0; }).length; }
+
+async function start() {
+  try {
+    if (!(await boot(CONFIG.LIFF_ORDER_ID))) return;
+    var r = await api('init');
+    S.branches = r.branches; S.items = r.items; S.cutoffs = r.cutoffs; S.today = r.today; S.hq = r.user.hq; S.mode = r.mode;
+    S.branch = r.user.branch;
+    $('chipDate').textContent = 'วันที่ ' + S.today;
+    if (!S.branch) return showPick();
+    enterOrder();
+  } catch (e) { fatal(e.message); }
+}
+
+function showPick() {
+  var box = $('pickList'); box.innerHTML = '';
+  S.branches.forEach(function (b) {
+    var btn = document.createElement('button');
+    btn.textContent = 'สาขา ' + b.name;
+    btn.onclick = async function () {
+      btn.disabled = true;
+      try { await api('setBranch', { branch: b.code }); S.branch = b.code; enterOrder(); }
+      catch (e) { toast(e.message); btn.disabled = false; }
+    };
+    box.appendChild(btn);
+  });
+  show('sPick');
+}
+
+function enterOrder() {
+  S.qty = {}; $('note').value = '';
+  var d = lsGet(draftKey());
+  if (d && d.qty) {
+    var valid = {}; S.items.forEach(function (i) { valid[i.name] = 1; });
+    Object.keys(d.qty).forEach(function (k) { if (valid[k] && d.qty[k] > 0) S.qty[k] = d.qty[k]; });
+    $('note').value = d.note || '';
+  }
+  $('chipBranch').innerHTML = 'สาขา ' + esc(branchName(S.branch)) + ' · <a href="#" id="chg">เปลี่ยน</a>';
+  $('chg').onclick = function (e) {
+    e.preventDefault();
+    if (selectedCount() && !confirm('เปลี่ยนสาขา? รายการที่เลือกไว้ของสาขานี้จะถูกเก็บเป็นฉบับร่างของสาขานี้')) return;
+    saveDraft(); showPick();
+  };
+  buildCats(); renderList(); show('sOrder');
+}
+
+function buildCats() {
+  var cats = ['ทั้งหมด', 'ที่เลือก'];
+  S.items.forEach(function (i) { if (i.category && cats.indexOf(i.category) < 0) cats.push(i.category); });
+  var box = $('cats'); box.innerHTML = '';
+  cats.forEach(function (c) {
+    var s = document.createElement('span');
+    s.className = 'chip' + (c === S.cat ? ' on' : ''); s.textContent = c;
+    s.onclick = function () { S.cat = c; buildCats(); renderList(); };
+    box.appendChild(s);
+  });
+}
+
+function renderList() {
+  var q = S.q.trim().toLowerCase();
+  var by = {}, order = [];
+  S.items.forEach(function (i) {
+    if (S.cat === 'ที่เลือก' ? !(S.qty[i.name] > 0) : (S.cat !== 'ทั้งหมด' && i.category !== S.cat)) return;
+    if (q && i.name.toLowerCase().indexOf(q) < 0 && i.supplier.toLowerCase().indexOf(q) < 0) return;
+    if (!by[i.supplier]) { by[i.supplier] = []; order.push(i.supplier); }
+    by[i.supplier].push(i);
+  });
+  var html = '';
+  order.forEach(function (s) {
+    html += '<div class="sup"><h3>' + esc(s) + (S.mode === 'cutoff' ? '<small>ส่งใบสั่ง ' + esc(S.cutoffs[s] || '') + ' น.</small>' : '') + '</h3>';
+    by[s].forEach(function (i) {
+      var v = S.qty[i.name] || 0;
+      html += '<div class="item' + (v > 0 ? ' sel' : '') + '"><div class="nm"><b>' + esc(i.name) + '</b><span>' + esc(i.unit) + '</span></div>' +
+        '<div class="step"><button data-n="' + esc(i.name) + '" data-d="-1" aria-label="ลด">−</button>' +
+        '<input inputmode="decimal" data-n="' + esc(i.name) + '" value="' + (v || '') + '" placeholder="0">' +
+        '<button data-n="' + esc(i.name) + '" data-d="1" aria-label="เพิ่ม">+</button></div></div>';
+    });
+    html += '</div>';
+  });
+  $('list').innerHTML = html || '<p class="note" style="text-align:center;margin-top:30px">ไม่พบรายการ</p>';
+  refreshBar();
+}
+
+function setQty(name, v) {
+  v = Math.max(0, Math.round(Number(v) * 100) / 100) || 0;
+  if (v > 0) S.qty[name] = v; else delete S.qty[name];
+  saveDraft();
+}
+
+function refreshBar() {
+  var n = selectedCount();
+  $('btnReview').disabled = !n;
+  $('btnReview').textContent = n ? 'ตรวจสอบออเดอร์ (' + n + ' รายการ)' : 'ตรวจสอบออเดอร์';
+}
+
+$('list').addEventListener('click', function (e) {
+  var b = e.target.closest('button[data-d]'); if (!b) return;
+  var n = b.dataset.n, cur = S.qty[n] || 0;
+  setQty(n, cur + Number(b.dataset.d));
+  var row = b.closest('.item'); var inp = row.querySelector('input');
+  inp.value = S.qty[n] || ''; row.classList.toggle('sel', S.qty[n] > 0); refreshBar();
+});
+$('list').addEventListener('change', function (e) {
+  var i = e.target.closest('input[data-n]'); if (!i) return;
+  setQty(i.dataset.n, String(i.value).replace(',', '.'));
+  i.value = S.qty[i.dataset.n] || ''; i.closest('.item').classList.toggle('sel', S.qty[i.dataset.n] > 0); refreshBar();
+});
+$('q').addEventListener('input', function () { S.q = this.value; renderList(); });
+$('note').addEventListener('input', saveDraft);
+
+$('btnReview').onclick = function () {
+  var by = {}, order = [];
+  S.items.forEach(function (i) {
+    if (!(S.qty[i.name] > 0)) return;
+    if (!by[i.supplier]) { by[i.supplier] = []; order.push(i.supplier); }
+    by[i.supplier].push(i);
+  });
+  $('revHead').textContent = 'สาขา ' + branchName(S.branch) + ' · วันที่ ' + S.today;
+  var html = '';
+  order.forEach(function (s) {
+    html += '<div class="card"><div class="hd"><span>' + esc(s) + '</span><span class="sub">' + by[s].length + ' รายการ</span></div><ul class="lines">';
+    by[s].forEach(function (i) { html += '<li><span>' + esc(i.name) + '</span><b>' + fmtQty(S.qty[i.name]) + ' ' + esc(i.unit) + '</b></li>'; });
+    html += '</ul></div>';
+  });
+  $('revList').innerHTML = html; show('sReview');
+};
+$('btnBack').onclick = function () { show('sOrder'); };
+
+$('btnSubmit').onclick = async function () {
+  var btn = this; btn.disabled = true; btn.textContent = 'กำลังส่ง…';
+  try {
+    var lines = Object.keys(S.qty).filter(function (k) { return S.qty[k] > 0; }).map(function (k) { return { name: k, qty: S.qty[k] }; });
+    var r = await api('submit', { lines: lines, note: $('note').value, branch: S.hq ? S.branch : undefined });
+    lsDel(draftKey()); S.qty = {}; $('note').value = '';
+    var html = '';
+    r.orders.forEach(function (o) {
+      html += '<div class="card"><div class="hd"><span>' + esc(o.supplier) + '</span><span class="sub">' + o.count + ' รายการ</span></div>' +
+        '<div class="sub">' + esc(o.order_no) + ' · ' + slipText(o) + '</div></div>';
+    });
+    $('doneList').innerHTML = html;
+    $('doneNote').textContent = r.mode === 'cutoff' ? 'ใบสั่งจะถูกส่งเข้ากลุ่มซัพตามเวลาที่ระบุ' : '';
+    show('sDone');
+  } catch (e) { toast(e.message); }
+  btn.disabled = false; btn.textContent = 'ยืนยันสั่งของ';
+};
+$('btnClose').onclick = closeOrBack;
+
+start();
+</script>
+</body>
+</html>
