@@ -14,12 +14,6 @@
 <div id="sLoad" class="screen center">กำลังโหลด…</div>
 <div id="sErr" class="screen center" hidden><p id="errMsg"></p><button class="linkbtn" onclick="location.reload()">ลองใหม่</button></div>
 
-<div id="sPick" class="screen" hidden>
-  <h1>เลือกสาขาของคุณ</h1>
-  <p class="note">เลือกครั้งเดียว ระบบจะจำไว้ให้ ออเดอร์จะถูกบันทึกเป็นของสาขานี้</p>
-  <div class="pick" id="pickList"></div>
-</div>
-
 <div id="sOrder" class="screen" hidden>
   <div class="top">
     <div class="row">
@@ -74,27 +68,11 @@ async function start() {
   try {
     if (!(await boot(CONFIG.LIFF_ORDER_ID))) return;
     var r = await api('init');
-    S.branches = r.branches; S.items = r.items; S.cutoffs = r.cutoffs; S.today = r.today; S.hq = r.user.hq; S.mode = r.mode;
-    S.branch = r.user.branch;
+    S.branches = [r.branch]; S.items = r.items; S.cutoffs = r.cutoffs; S.today = r.today; S.mode = r.mode;
+    S.branch = r.branch.code;
     $('chipDate').textContent = 'วันที่ ' + S.today;
-    if (!S.branch) return showPick();
     enterOrder();
   } catch (e) { fatal(e.message); }
-}
-
-function showPick() {
-  var box = $('pickList'); box.innerHTML = '';
-  S.branches.forEach(function (b) {
-    var btn = document.createElement('button');
-    btn.textContent = 'สาขา ' + b.name;
-    btn.onclick = async function () {
-      btn.disabled = true;
-      try { await api('setBranch', { branch: b.code }); S.branch = b.code; enterOrder(); }
-      catch (e) { toast(e.message); btn.disabled = false; }
-    };
-    box.appendChild(btn);
-  });
-  show('sPick');
 }
 
 function enterOrder() {
@@ -105,12 +83,7 @@ function enterOrder() {
     Object.keys(d.qty).forEach(function (k) { if (valid[k] && d.qty[k] > 0) S.qty[k] = d.qty[k]; });
     $('note').value = d.note || '';
   }
-  $('chipBranch').innerHTML = 'สาขา ' + esc(branchName(S.branch)) + ' · <a href="#" id="chg">เปลี่ยน</a>';
-  $('chg').onclick = function (e) {
-    e.preventDefault();
-    if (selectedCount() && !confirm('เปลี่ยนสาขา? รายการที่เลือกไว้ของสาขานี้จะถูกเก็บเป็นฉบับร่างของสาขานี้')) return;
-    saveDraft(); showPick();
-  };
+  $('chipBranch').textContent = 'สาขา ' + branchName(S.branch);
   buildCats(); renderList(); show('sOrder');
 }
 
@@ -200,7 +173,7 @@ $('btnSubmit').onclick = async function () {
   var btn = this; btn.disabled = true; btn.textContent = 'กำลังส่ง…';
   try {
     var lines = Object.keys(S.qty).filter(function (k) { return S.qty[k] > 0; }).map(function (k) { return { name: k, qty: S.qty[k] }; });
-    var r = await api('submit', { lines: lines, note: $('note').value, branch: S.hq ? S.branch : undefined });
+    var r = await api('submit', { lines: lines, note: $('note').value });
     lsDel(draftKey()); S.qty = {}; $('note').value = '';
     var html = '';
     r.orders.forEach(function (o) {
